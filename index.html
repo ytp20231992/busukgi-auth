@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SanGa Pro - 카카오 로그인</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: white;
+    }
+
+    .container {
+      text-align: center;
+      padding: 40px;
+    }
+
+    .logo {
+      font-size: 56px;
+      margin-bottom: 16px;
+      animation: bounce 2s ease-in-out infinite;
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    h1 {
+      font-size: 28px;
+      margin-bottom: 16px;
+      font-weight: 800;
+    }
+
+    .message {
+      font-size: 16px;
+      margin-bottom: 24px;
+      opacity: 0.9;
+    }
+
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error {
+      background: rgba(255, 107, 107, 0.2);
+      border: 2px solid #ff6b6b;
+      padding: 16px;
+      border-radius: 12px;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+
+    .success {
+      background: rgba(76, 175, 80, 0.2);
+      border: 2px solid #4CAF50;
+      padding: 16px;
+      border-radius: 12px;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🏠</div>
+    <h1>SanGa Pro</h1>
+    <p class="message" id="message">카카오 로그인 처리 중...</p>
+    <div class="spinner" id="spinner"></div>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    // ============================================
+    // Configuration
+    // ============================================
+    const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co';
+    const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY';
+    const KAKAO_REST_API_KEY = 'YOUR_KAKAO_REST_API_KEY';
+
+    // ============================================
+    // OAuth Callback 처리
+    // ============================================
+    async function handleKakaoCallback() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      const error = urlParams.get('error');
+
+      // 에러 확인
+      if (error) {
+        showError('카카오 로그인이 취소되었습니다.');
+        setTimeout(() => window.close(), 2000);
+        return;
+      }
+
+      // 인증 코드 확인
+      if (!code) {
+        showError('인증 코드가 없습니다. 다시 시도해주세요.');
+        setTimeout(() => window.close(), 2000);
+        return;
+      }
+
+      try {
+        // 1. 카카오 토큰 발급
+        const tokenResponse = await fetch('https://kauth.kakao.com/oauth/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: KAKAO_REST_API_KEY,
+            redirect_uri: window.location.origin + window.location.pathname,
+            code: code,
+          }),
+        });
+
+        const tokenData = await tokenResponse.json();
+
+        if (!tokenData.access_token) {
+          throw new Error('토큰 발급 실패');
+        }
+
+        console.log('카카오 토큰 발급 성공');
+
+        // 2. Supabase auth-kakao-callback 호출
+        const authResponse = await fetch(`${SUPABASE_URL}/functions/v1/auth-kakao-callback`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            access_token: tokenData.access_token
+          }),
+        });
+
+        const authData = await authResponse.json();
+
+        if (!authResponse.ok) {
+          throw new Error(authData.error || '로그인 실패');
+        }
+
+        console.log('Supabase 인증 성공:', authData);
+
+        // 3. 로그인 성공 - 확장 프로그램으로 데이터 전달
+        showSuccess('로그인 성공! 창을 닫는 중...');
+
+        // Chrome Extension으로 메시지 전송 (postMessage 사용)
+        if (window.opener) {
+          window.opener.postMessage({
+            type: 'KAKAO_LOGIN_SUCCESS',
+            token: authData.token,
+            user: authData.user,
+            subscription: authData.subscription
+          }, '*');
+        }
+
+        // 3초 후 창 닫기
+        setTimeout(() => {
+          window.close();
+        }, 1500);
+
+      } catch (error) {
+        console.error('로그인 처리 실패:', error);
+        showError('로그인 처리 중 오류가 발생했습니다: ' + error.message);
+        setTimeout(() => window.close(), 3000);
+      }
+    }
+
+    // ============================================
+    // UI 헬퍼
+    // ============================================
+    function showError(message) {
+      document.getElementById('message').textContent = '오류 발생';
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('result').innerHTML = `<div class="error">${message}</div>`;
+    }
+
+    function showSuccess(message) {
+      document.getElementById('message').textContent = '완료!';
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('result').innerHTML = `<div class="success">${message}</div>`;
+    }
+
+    // ============================================
+    // 초기화
+    // ============================================
+    window.addEventListener('DOMContentLoaded', () => {
+      handleKakaoCallback();
+    });
+  </script>
+</body>
+</html>
